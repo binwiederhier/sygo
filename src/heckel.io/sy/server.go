@@ -8,23 +8,23 @@ import (
 	"strings"
 )
 
-type server struct {
+type Server struct {
 	index *index
 }
 
-func newServer() server {
+func NewServer() Server {
 	index, err := NewIndex("/tmp/sy")
 	check(err, 1, "Cannot open database")
 
 	err = index.Load()
 	check(err, 2, "Cannot load index")
 
-	return server{
+	return Server{
 		index: index,
 	}
 }
 
-func (server *server) exit(w http.ResponseWriter, code int, message string) {
+func (server *Server) exit(w http.ResponseWriter, code int, message string) {
 	response, _ := json.Marshal(map[string]string{
 		"error": message,
 	})
@@ -33,7 +33,7 @@ func (server *server) exit(w http.ResponseWriter, code int, message string) {
 	w.Write([]byte(response))
 }
 
-func (server *server) serveUpload(w http.ResponseWriter, r *http.Request) {
+func (server *Server) serveUpload(w http.ResponseWriter, r *http.Request) {
 	fmt.Println(r.URL.Path)
 	checksum := strings.TrimPrefix(r.URL.Path, "/api/upload/")
 
@@ -56,7 +56,22 @@ func (server *server) serveUpload(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (server *server) serveDiff(w http.ResponseWriter, r *http.Request) {
+func (server *Server) serveUploadMulti(w http.ResponseWriter, r *http.Request) {
+	fmt.Println(r.URL.Path)
+
+	r.ParseForm()
+
+	for key, value := range r.Form {
+		fmt.Printf("%s = %s\n", key, value)
+	}
+	/*reader, err := r.MultipartReader()
+	form, err := reader.ReadForm(5 * 1024 * 1024)
+
+	bodyBytes, _ := ioutil.ReadAll(r.Body)
+	fmt.Println(string(bodyBytes))*/
+}
+
+func (server *Server) serveDiff(w http.ResponseWriter, r *http.Request) {
 	fmt.Println(r.URL.Path)
 	body, err := ioutil.ReadAll(r.Body)
 
@@ -91,13 +106,9 @@ func (server *server) serveDiff(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(response))
 }
 
-func (server *server) run() {
-	http.HandleFunc("/api/upload/", server.serveUpload)
+func (server *Server) Run(port int) {
 	http.HandleFunc("/api/diff", server.serveDiff)
-	http.ListenAndServe(":8080", nil)
-}
-
-func runServer() {
-	server := newServer()
-	server.run()
+	http.HandleFunc("/api/upload", server.serveUploadMulti)
+	http.HandleFunc("/api/upload/", server.serveUpload)
+	http.ListenAndServe(fmt.Sprintf(":%d", port), nil)
 }

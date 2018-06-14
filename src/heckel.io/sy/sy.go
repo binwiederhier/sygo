@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"fmt"
+	"flag"
 )
 
 func check(err error, code int, message string) {
@@ -17,6 +18,12 @@ func exit(code int, message string) {
 }
 
 func main() {
+	serverCommand := flag.NewFlagSet("server", flag.ExitOnError)
+	indexCommand := flag.NewFlagSet("index", flag.ExitOnError)
+
+	port := serverCommand.Int("port", 8080, "Listen port for the API Server")
+	api := indexCommand.String("api", "http://localhost:8080", "URL of API Server")
+
 	if len(os.Args) < 2 {
 		exit(1, "Syntax: sy (index|server)")
 	}
@@ -25,8 +32,15 @@ func main() {
 
 	switch command {
 	case "index":
-		runIndex()
+		indexCommand.Parse(os.Args[2:])
+		client := NewClient(*api)
+		client.Index()
 	case "server":
-		runServer()
+		serverCommand.Parse(os.Args[2:])
+		server := NewServer()
+		server.Run(*port)
+	default:
+		flag.PrintDefaults()
+		os.Exit(1)
 	}
 }
