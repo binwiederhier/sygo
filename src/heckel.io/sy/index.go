@@ -196,5 +196,7 @@ func (index *index) ReadChunk(checksum string) ([]byte, error) {
 
 func (index *index) DeleteChunk(checksum string) {
 	chunkFile := index.GetChunkPath(checksum)
+
 	os.Remove(chunkFile)
+	os.Remove(filepath.Dir(chunkFile))
 }

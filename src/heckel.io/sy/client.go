@@ -81,56 +81,51 @@ func runIndex() {
 	filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
 		if !info.IsDir() && !strings.HasPrefix(path, root) {
 			newChunks := indexFile(index, path)
+			chunks = append(chunks, newChunks...)
 
-			if len(newChunks) > 0 {
-				fmt.Printf("Indexed %s using %d new chunk(s)\n", path, len(newChunks))
-				chunks = append(chunks, newChunks...)
-			}
-
-			if len(chunks) > 10 {
-				fmt.Println("10 chunks, uploading...")
+			if len(chunks) > 50 {
 				upload(index, chunks)
+				chunks = make([]string, 0)
 			}
 		}
 
 		return nil
 	})
 
+	if len(chunks) > 0 {
+		upload(index, chunks)
+	}
+
 	index.Commit()
 }
 
 func upload(index *index, chunks []string) {
-	request := NewJsonRpcRequest("v1/chunks/diff", map[string]interface{}{
-		"chunks": chunks,
-	})
+	chunkListJson, err := json.Marshal(chunks)
+	check(err, 1, "Cannot convert to JSON")
 
-	requestStr, err := json.Marshal(request)
-	check(err, 1, "Cannot create JSON array")
-
-	responseStr, err := http.Post("http://localhost:8080/api", "application/json", bytes.NewBuffer(requestStr))
+	responseStr, err := http.Post("http://localhost:8080/api/diff", "application/json", bytes.NewBuffer(chunkListJson))
 	check(err, 2, "Cannot check chunks API")
 
 	body, err := ioutil.ReadAll(responseStr.Body)
 	check(err, 3, "Cannot read body")
 
-	response, err := ParseJsonRpcResponse(body)
+	var unknownList []string
+	err = json.Unmarshal(body, &unknownList)
+	fmt.Println(string(body))
 	check(err, 4, "Cannot parse response")
 
-	fmt.Println(response)
+	for _, checksum := range unknownList {
+		chunkBytes, err := index.ReadChunk(checksum)
+		check(err, 5, "Cannot read chunk " + checksum)
 
-	if unknownChunks, ok := response.Result["unknown"]; ok {
-		for _, checksum := range unknownChunks.([]interface{}) {
-			checksumStr := checksum.(string)
+		fmt.Println("Uploading", checksum)
+		_, err = http.Post("http://localhost:8080/api/upload/" + checksum, "application/octet-stream", bytes.NewReader(chunkBytes))
+		check(err, 6, "Bad response")
 
-			chunkBytes, err := index.ReadChunk(checksumStr)
-			check(err, 5, "Cannot read chunk " + checksumStr)
-
-			fmt.Println("Uploading", checksumStr)
-			_, err = http.Post("http://localhost:8080/api/upload/" + checksumStr, "application/octet-stream", bytes.NewReader(chunkBytes))
-			check(err, 6, "Bad response")
-
-			index.DeleteChunk(checksumStr)
-		}
+		index.DeleteChunk(checksum)
 	}
 
+	for _, checksum := range chunks {
+		index.DeleteChunk(checksum)
+	}
 }
