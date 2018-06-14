@@ -89,7 +89,10 @@ fmt.Println(checksum)
 			server.exit(w, 400, "Cannot read request")
 		}
 
+		server.index.Begin()
+		server.index.AddChunk(checksum)
 		server.index.WriteChunk(checksum, chunkBytes)
+		server.index.Commit()
 	}
 }
 
