@@ -59,6 +59,11 @@ func (client *Client) Index() {
 		return nil
 	})
 
+	if len(client.queue) > 0 {
+		client.removeKnownFromQueue()
+		client.uploadQueue()
+	}
+
 	client.idx.Commit()
 }
 
@@ -106,7 +111,7 @@ func (client *Client) indexFile(filename string) []string {
 	return chunks
 }
 
-func (client *Client) diff(knownChunks []string) []string {
+func (client *Client) retrieveUnknownChunks(knownChunks []string) []string {
 	chunkListJson, err := json.Marshal(knownChunks)
 	check(err, 1, "Cannot convert to JSON")
 
@@ -119,32 +124,13 @@ func (client *Client) diff(knownChunks []string) []string {
 
 	var unknownList []string
 	err = json.Unmarshal(body, &unknownList)
-	fmt.Println(string(body))
 	check(err, 4, "Cannot parse response")
 
+	if len(unknownList) > 0 {
+		fmt.Printf("%d unknown chunk(s)\n", len(unknownList))
+	}
+
 	return unknownList
-}
-
-func (client *Client) upload(chunks []string) {
-	unknownList := client.diff(chunks)
-
-	for _, checksum := range unknownList {
-		client.uploadChunk(checksum)
-		client.idx.DeleteChunk(checksum)
-	}
-
-	for _, checksum := range chunks {
-		client.idx.DeleteChunk(checksum)
-	}
-}
-
-func (client *Client) uploadChunk(checksum string) {
-	chunkBytes, err := client.idx.ReadChunk(checksum)
-	check(err, 5, "Cannot read chunk " + checksum)
-
-	uploadUrl := fmt.Sprintf("%s/api/upload/%s", client.api, checksum)
-	_, err = http.Post(uploadUrl, "application/octet-stream", bytes.NewReader(chunkBytes))
-	check(err, 6, "Bad response when uploading" + checksum)
 }
 
 func (client *Client) queueUpload(chunks []string) {
@@ -157,17 +143,26 @@ func (client *Client) queueUpload(chunks []string) {
 		client.queueSize += info.Size()
 
 		if client.queueSize > 10 * 1024 * 1024 {
-			unknown := client.diff(client.queue)
-			client.uploadQueue()
+			client.removeKnownFromQueue()
+
+			if client.queueSize > 10 * 1024 * 1024 {
+				client.uploadQueue()
+			}
 		}
 	}
 }
 
 func (client *Client) uploadQueue() {
+	if len(client.queue) == 0 {
+		return
+	}
+
+	fmt.Printf("Uploading queue of %d chunk(s) ...\n", len(client.queue))
+
 	body := new(bytes.Buffer)
 	writer := multipart.NewWriter(body)
 
-	for _, checksum := range client.queue {
+	for checksum, _ := range client.queue {
 		part, err := writer.CreateFormFile(checksum, checksum)
 		check(err, 1, "Cannot create form part for " + checksum)
 
@@ -180,15 +175,44 @@ func (client *Client) uploadQueue() {
 
 	err := writer.Close()
 	check(err, 3, "Unable to close writer")
-
+//fmt.Println("body", body)
 	uploadUrl := fmt.Sprintf("%s/api/upload", client.api)
 	request, err := http.NewRequest("POST", uploadUrl, body)
 	check(err, 4, "Cannot create new POST request")
 
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+
 	httpClient := http.Client{}
-	_, err = httpClient.Do(request)
+	response, err := httpClient.Do(request)
 	check(err, 5, "Invalid or no response")
 
-	client.queue = make([]string, 0)
+	ioutil.ReadAll(response.Body)
+	// fmt.Println("->", string(s))
+
+	for checksum, _ := range client.queue {
+		client.idx.DeleteChunk(checksum)
+	}
+
+	client.queue = make(map[string]os.FileInfo, 0)
 	client.queueSize = 0
+}
+
+func (client *Client) removeKnownFromQueue() {
+	known := make([]string, 0)
+
+	for checksum, _ := range client.queue {
+		known = append(known, checksum)
+	}
+
+	unknown := client.retrieveUnknownChunks(known)
+	newQueue := make(map[string]os.FileInfo, 0)
+	var newQueueSize int64
+
+	for _, checksum := range unknown {
+		newQueue[checksum] = client.queue[checksum]
+		newQueueSize += client.queue[checksum].Size()
+	}
+
+	client.queue = newQueue
+	client.queueSize = newQueueSize
 }

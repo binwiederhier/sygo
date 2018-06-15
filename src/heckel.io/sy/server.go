@@ -5,11 +5,11 @@ import (
 	"io/ioutil"
 	"encoding/json"
 	"fmt"
-	"strings"
+	"mime/multipart"
 )
 
 type Server struct {
-	index *index
+	idx *index
 }
 
 func NewServer() Server {
@@ -20,7 +20,7 @@ func NewServer() Server {
 	check(err, 2, "Cannot load index")
 
 	return Server{
-		index: index,
+		idx: index,
 	}
 }
 
@@ -35,45 +35,45 @@ func (server *Server) exit(w http.ResponseWriter, code int, message string) {
 
 func (server *Server) serveUpload(w http.ResponseWriter, r *http.Request) {
 	fmt.Println(r.URL.Path)
-	checksum := strings.TrimPrefix(r.URL.Path, "/api/upload/")
 
-	if len(checksum) != 32 {
-		server.exit(w, 400, "Bad request")
-		return
+	err := r.ParseMultipartForm(50 * 1024 * 1024)
+
+	if err != nil {
+		server.exit(w, 400, "Cannot read multipart request")
 	}
 
-	if !server.index.Exists(checksum) {
-		chunkBytes, err := ioutil.ReadAll(r.Body)
+	fmt.Println(r)
+	server.idx.Begin()
 
-		if err != nil {
-			server.exit(w, 400, "Cannot read request")
+	for _, headers := range r.MultipartForm.File {
+		for _, hdr := range headers {
+			checksum := hdr.Filename
+
+			if len(checksum) != 32 {
+				server.exit(w, 400, "Bad request")
+				return
+			}
+
+			var reader multipart.File
+			if reader, err = hdr.Open(); nil != err {
+				server.exit(w, 500, "Invalid request (1)")
+				return
+			}
+
+			server.idx.WriteChunkFromReader(checksum, reader)
+			server.idx.AddChunk(checksum)
+
+			fmt.Println("-> uploaded", checksum)
 		}
-
-		server.index.Begin()
-		server.index.AddChunk(checksum)
-		server.index.WriteChunk(checksum, chunkBytes)
-		server.index.Commit()
 	}
-}
 
-func (server *Server) serveUploadMulti(w http.ResponseWriter, r *http.Request) {
-	fmt.Println(r.URL.Path)
-
-	r.ParseForm()
-
-	for key, value := range r.Form {
-		fmt.Printf("%s = %s\n", key, value)
-	}
-	/*reader, err := r.MultipartReader()
-	form, err := reader.ReadForm(5 * 1024 * 1024)
-
-	bodyBytes, _ := ioutil.ReadAll(r.Body)
-	fmt.Println(string(bodyBytes))*/
+	server.idx.Commit()
 }
 
 func (server *Server) serveDiff(w http.ResponseWriter, r *http.Request) {
 	fmt.Println(r.URL.Path)
 	body, err := ioutil.ReadAll(r.Body)
+	fmt.Println("<-", string(body))
 
 	if err != nil {
 		server.exit(w, 400, "Cannot read request")
@@ -91,7 +91,7 @@ func (server *Server) serveDiff(w http.ResponseWriter, r *http.Request) {
 	unknown := make([]string, 0)
 
 	for _, checksum := range chunks {
-		if !server.index.Exists(checksum) {
+		if !server.idx.Exists(checksum) {
 			unknown = append(unknown, checksum)
 		}
 	}
@@ -103,12 +103,12 @@ func (server *Server) serveDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	fmt.Println("->", string(response))
 	w.Write([]byte(response))
 }
 
 func (server *Server) Run(port int) {
 	http.HandleFunc("/api/diff", server.serveDiff)
-	http.HandleFunc("/api/upload", server.serveUploadMulti)
-	http.HandleFunc("/api/upload/", server.serveUpload)
+	http.HandleFunc("/api/upload", server.serveUpload)
 	http.ListenAndServe(fmt.Sprintf(":%d", port), nil)
 }

@@ -7,6 +7,7 @@ import (
 	"os"
 	"io/ioutil"
 	"path/filepath"
+	"io"
 )
 
 type index struct {
@@ -187,6 +188,29 @@ func (index *index) WriteChunk(checksum string, b []byte) {
 		os.Mkdir(filepath.Dir(chunkFile), 0744)
 		ioutil.WriteFile(chunkFile, b, 0644)
 	}
+}
+
+func (index *index) WriteChunkFromReader(checksum string, source io.Reader) error {
+	chunkFile := index.GetChunkPath(checksum)
+
+	if _, err := os.Stat(chunkFile); err == nil {
+		return errors.New("file exists")
+	}
+
+	os.Mkdir(filepath.Dir(chunkFile), 0744)
+
+	var err error
+	var destination *os.File
+
+	if destination, err = os.Create(chunkFile); nil != err {
+		return err
+	}
+
+	if _, err = io.Copy(destination, source); nil != err {
+		return err
+	}
+
+	return nil
 }
 
 func (index *index) ReadChunk(checksum string) ([]byte, error) {
